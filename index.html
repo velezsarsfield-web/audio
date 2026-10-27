@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Saludo para su hijo/a</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.1/lame.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px; min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #eef3fb; color: #1d2a44;
+      display: flex; justify-content: center; align-items: flex-start;
+    }
+    .card { width: 100%; max-width: 480px; }
+
+    .hero { position: relative; }
+    .hero img {
+      display: none; width: 100%; height: auto;
+      border-radius: 18px; box-shadow: 0 4px 12px rgba(0,0,0,.12);
+    }
+    .cartel {
+      background: #2f5fd0; color: #fff; border-radius: 18px;
+      padding: 22px 20px; text-align: center; line-height: 1.4;
+      font-size: 18px; box-shadow: 0 6px 16px rgba(47,95,208,.3);
+    }
+    .cartel h1 { margin: 0 0 8px; font-size: 24px; }
+
+    .hero.conFoto img { display: block; }
+    .hero.conFoto .cartel {
+      position: absolute; left: 0; right: 0; bottom: 0; top: 50%;
+      display: flex; flex-direction: column; justify-content: center;
+      padding: 8px 14px;
+      color: #000; font-weight: 900;
+      font-size: clamp(13px, 4vw, 19px);
+      background: linear-gradient(to top, rgba(255,255,255,.75), rgba(255,255,255,.35) 70%, rgba(255,255,255,0));
+      border-radius: 0 0 18px 18px; box-shadow: none;
+    }
+    .hero.conFoto .cartel h1 { font-size: clamp(18px, 6vw, 26px); margin: 0 0 4px; }
+
+    .box { background: #fff; border-radius: 18px; padding: 20px; margin-top: 16px;
+           box-shadow: 0 4px 12px rgba(0,0,0,.08); }
+    label { font-weight: bold; font-size: 14px; letter-spacing: .5px; }
+    input[type=text] {
+      width: 100%; margin-top: 8px; padding: 14px; font-size: 18px;
+      border: 2px solid #c9d3e6; border-radius: 12px;
+    }
+    button {
+      width: 100%; margin-top: 14px; padding: 18px; font-size: 19px; font-weight: bold;
+      border: none; border-radius: 14px; color: #fff; cursor: pointer;
+    }
+    button:disabled { opacity: .5; }
+    #btnGrabar { background: #d93025; }
+    #btnGrabar.grabando { background: #444; animation: pulso 1.2s infinite; }
+    #btnEnviar { background: #1e8e3e; }
+    #btnOtra { background: #777; font-size: 16px; padding: 12px; }
+    @keyframes pulso { 50% { opacity: .65; } }
+    #timer { text-align: center; font-size: 28px; margin-top: 12px; font-weight: bold; }
+    audio { width: 100%; margin-top: 14px; }
+    #msg { margin-top: 14px; text-align: center; font-size: 16px; min-height: 22px; }
+    .ok { color: #1e8e3e; font-weight: bold; }
+    .err { color: #d93025; }
+    .alt { margin-top: 18px; padding-top: 14px; border-top: 1px dashed #c9d3e6;
+           font-size: 14px; text-align: center; color: #555; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+<div class="card">
+
+  <div class="hero" id="hero">
+    <img id="bannerImg" alt="">
+    <div class="cartel">
+      <h1>Querida familia 💙</h1>
+      Desde aquí puede enviar un audio saludando a su hijo/a.
+      Lo escuchará en su último día de clases.
+    </div>
+  </div>
+
+  <div class="box">
+    <label for="nombre">NOMBRE DEL ALUMNO</label>
+    <input type="text" id="nombre" placeholder="Nombre y apellido" autocomplete="off">
+
+    <button id="btnGrabar">🎙️ Grabar audio</button>
+    <div id="timer" class="hidden">00:00</div>
+
+    <div id="preview" class="hidden">
+      <audio id="player" controls></audio>
+      <button id="btnEnviar">✅ Enviar saludo</button>
+      <button id="btnOtra">Volver a grabar</button>
+    </div>
+
+    <div id="msg"></div>
+
+    <div class="alt">
+      ¿No funciona la grabación? Use el grabador de su teléfono:<br>
+      <input type="file" id="fileAlt" accept="audio/*" capture style="margin-top:8px; max-width:100%">
+    </div>
+  </div>
+</div>
+
+<script>
+  // ⚠️ PEGUE AQUÍ LA URL /exec DE SU APLICACIÓN WEB DE APPS SCRIPT
+  const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzWpI3Vs5juxKuqn8dut0r65zxlfLp_h_oLT1Uks4NQz8bzuu1R4P5t3JZjnWnw_tsuKQ/exec';
+
+  let mediaRecorder, chunks = [], stream, tInicio, tInterval;
+  let audioListo = null; // { blob, ext }
+
+  const $ = id => document.getElementById(id);
+  const msg = (t, c) => { $('msg').className = c || ''; $('msg').textContent = t; };
+
+  function fmt(s) { return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0'); }
+
+  $('btnGrabar').onclick = async () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') { mediaRecorder.stop(); return; }
+
+    if (!$('nombre').value.trim()) { msg('Primero escriba el nombre del alumno.', 'err'); $('nombre').focus(); return; }
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      msg('No se pudo acceder al micrófono. Acepte el permiso o use el grabador de abajo.', 'err');
+      return;
+    }
+
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      clearInterval(tInterval);
+      stream.getTracks().forEach(t => t.stop());
+      $('btnGrabar').classList.remove('grabando');
+      $('btnGrabar').textContent = '🎙️ Grabar audio';
+      $('timer').classList.add('hidden');
+      const raw = new Blob(chunks, { type: mediaRecorder.mimeType });
+      await prepararAudio(raw);
+    };
+    mediaRecorder.start();
+
+    $('btnGrabar').classList.add('grabando');
+    $('btnGrabar').textContent = '⏹️ Detener grabación';
+    $('preview').classList.add('hidden');
+    $('timer').classList.remove('hidden');
+    msg('');
+    tInicio = Date.now();
+    $('timer').textContent = '00:00';
+    tInterval = setInterval(() => $('timer').textContent = fmt(Math.floor((Date.now()-tInicio)/1000)), 500);
+  };
+
+  // Convierte a MP3 (si falla, deja el original)
+  async function prepararAudio(blob) {
+    msg('Preparando audio…');
+    try {
+      audioListo = { blob: await aMp3(blob), ext: 'mp3' };
+    } catch (e) {
+      console.warn('No se pudo convertir a MP3', e);
+      const t = blob.type || '';
+      const ext = t.includes('mp4') || t.includes('aac') || t.includes('m4a') ? 'm4a'
+                : t.includes('ogg') ? 'ogg' : t.includes('wav') ? 'wav'
+                : t.includes('mpeg') ? 'mp3' : 'webm';
+      audioListo = { blob: blob, ext: ext };
+    }
+    $('player').src = URL.createObjectURL(audioListo.blob);
+    $('preview').classList.remove('hidden');
+    msg('Escúchelo y, si está bien, toque "Enviar saludo".');
+  }
+
+  async function aMp3(blob) {
+    const buf = await blob.arrayBuffer();
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const audio = await new Promise((res, rej) => ctx.decodeAudioData(buf, res, rej));
+    const rate = audio.sampleRate;
+
+    const len = audio.length, mono = new Float32Array(len);
+    for (let c = 0; c < audio.numberOfChannels; c++) {
+      const d = audio.getChannelData(c);
+      for (let i = 0; i < len; i++) mono[i] += d[i] / audio.numberOfChannels;
+    }
+    const pcm = new Int16Array(len);
+    for (let i = 0; i < len; i++) {
+      const s = Math.max(-1, Math.min(1, mono[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+
+    const enc = new lamejs.Mp3Encoder(1, rate, 96);
+    const out = [];
+    for (let i = 0; i < pcm.length; i += 1152) {
+      const b = enc.encodeBuffer(pcm.subarray(i, i + 1152));
+      if (b.length) out.push(new Int8Array(b));
+    }
+    const fin = enc.flush();
+    if (fin.length) out.push(new Int8Array(fin));
+    ctx.close();
+    return new Blob(out, { type: 'audio/mpeg' });
+  }
+
+  // Alternativa: grabador nativo del teléfono
+  $('fileAlt').onchange = async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (!$('nombre').value.trim()) { msg('Primero escriba el nombre del alumno.', 'err'); e.target.value=''; return; }
+    await prepararAudio(f);
+  };
+
+  $('btnOtra').onclick = () => {
+    audioListo = null;
+    $('preview').classList.add('hidden');
+    $('fileAlt').value = '';
+    msg('');
+  };
+
+  $('btnEnviar').onclick = async () => {
+    const nombre = $('nombre').value.trim();
+    if (!nombre) { msg('Escriba el nombre del alumno.', 'err'); return; }
+    if (!audioListo) return;
+
+    $('btnEnviar').disabled = true; $('btnOtra').disabled = true;
+    msg('Enviando… no cierre la página.');
+
+    try {
+      const base64 = await new Promise(res => {
+        const r = new FileReader();
+        r.onloadend = () => res(r.result.split(',')[1]);
+        r.readAsDataURL(audioListo.blob);
+      });
+
+      // text/plain evita el "preflight" de CORS, que Apps Script no admite
+      const resp = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ nombre: nombre, base64: base64, ext: audioListo.ext })
+      });
+      const r = await resp.json();
+      if (!r.ok) throw new Error(r.error || 'Error desconocido');
+
+      msg('¡Saludo enviado con éxito! 💙 Muchas gracias.', 'ok');
+      $('preview').classList.add('hidden');
+      $('nombre').value = ''; audioListo = null; $('fileAlt').value = '';
+    } catch (err) {
+      msg('Error al enviar: ' + err.message + '. Intente nuevamente.', 'err');
+    }
+    $('btnEnviar').disabled = false; $('btnOtra').disabled = false;
+  };
+
+  // Foto superior: al cargar, la leyenda pasa a quedar sobre la imagen
+  fetch(APPS_SCRIPT_URL + '?accion=imagen')
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) throw new Error(d.error);
+      $('bannerImg').onload = () => $('hero').classList.add('conFoto');
+      $('bannerImg').src = d.src;
+    })
+    .catch(e => console.warn('No se pudo cargar la imagen', e));
+</script>
+</body>
+</html>
